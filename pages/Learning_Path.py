@@ -7,9 +7,20 @@ import os
 
 from ui import render_topbar
 from db import get_collection
-
 from dotenv import load_dotenv
-from google import genai   # ✅ NEW Gemini SDK
+
+# ================= SAFE GEMINI IMPORT =================
+Client = None
+genai = None
+
+try:
+    from google.genai import Client  # new SDK
+except Exception:
+    try:
+        import google.generativeai as genai  # old SDK
+    except Exception:
+        pass
+
 
 # ================= ENV SETUP =================
 
@@ -18,11 +29,23 @@ load_dotenv()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GEMINI_MODEL = os.getenv("GOOGLE_GEMINI_MODEL", "gemini-1.5-flash")
 
+client = None
+GEMINI_ERROR = None
+
 if not GEMINI_API_KEY:
     GEMINI_ERROR = "GEMINI_API_KEY not set in environment variables."
 else:
-    GEMINI_ERROR = None
-    client = genai.Client(api_key=GEMINI_API_KEY)
+    try:
+        if Client:
+            client = Client(api_key=GEMINI_API_KEY)
+        elif genai:
+            genai.configure(api_key=GEMINI_API_KEY)
+            client = genai
+        else:
+            GEMINI_ERROR = "No Gemini SDK available"
+    except Exception as e:
+        GEMINI_ERROR = str(e)
+
 
 # ================= GEMINI FUNCTION =================
 
@@ -32,8 +55,8 @@ def generate_learning_path(missing_skills, target_role, experience, resume_text)
     Returns Markdown text.
     """
 
-    if GEMINI_ERROR:
-        return f"**[Configuration Error]** {GEMINI_ERROR}"
+    if GEMINI_ERROR or not client:
+        return f"❌ Gemini error: {GEMINI_ERROR}"
 
     if not missing_skills:
         return "No missing skills selected."
@@ -62,26 +85,22 @@ Your task:
 3. Keep explanations clear and encouraging
 4. Use **Markdown only**
 5. Do NOT return JSON
-
-Guidelines:
-- Assume basic programming knowledge
-- Order phases from fundamentals → advanced
 """
 
     try:
-        response = client.models.generate_content(
-            model=GEMINI_MODEL,
-            contents=prompt,
-        )
-
-        # Safe text extraction
-        if hasattr(response, "text") and response.text:
+        if Client:
+            response = client.models.generate_content(
+                model=GEMINI_MODEL,
+                contents=prompt,
+            )
             return response.text.strip()
-
-        return response.candidates[0].content.parts[0].text.strip()
+        else:
+            model = client.GenerativeModel(GEMINI_MODEL)
+            return model.generate_content(prompt).text.strip()
 
     except Exception as e:
         return f"❌ Error while generating learning path: {e}"
+
 
 # ================= STREAMLIT PAGE =================
 
@@ -110,18 +129,19 @@ you were missing in your last job search.
     else:
         st.warning("You are not logged in. You can generate a roadmap, but it won’t be saved.")
 
-    # ================= LOAD LAST SEARCH =================
+    # ================= SAFE SESSION HANDLING =================
 
-    last_search = st.session_state.get("last_search")
-    if not last_search:
-        st.warning("No job search found. Please run a job search on the Home page first.")
-        return
+    last_search = st.session_state.get("last_search") or {}
+    result = last_search.get("result") or {}
+    matches = result.get("matches") or []
 
-    result = last_search.get("result", {})
-    matches = result.get("matches", [])
     resume_text = last_search.get("resume_text", "")
     experience = last_search.get("experience", "")
     default_domain = last_search.get("domain", "")
+
+    if not matches:
+        st.warning("No job search found. Please run a job search on the Home page first.")
+        return
 
     # ================= COLLECT MISSING SKILLS =================
 
@@ -164,8 +184,6 @@ you were missing in your last job search.
     # ================= YOUTUBE LINKS =================
 
     st.subheader("▶️ YouTube Tutorials")
-    st.caption("Click a skill to open YouTube tutorials.")
-
     for skill in selected_skills:
         yt_query = quote_plus(f"{skill} tutorial for beginners")
         yt_url = f"https://www.youtube.com/results?search_query={yt_query}"
@@ -173,7 +191,7 @@ you were missing in your last job search.
 
     st.markdown("---")
 
-    # ================= GENERATE LEARNING PATH =================
+    # ================= GENERATE =================
 
     st.subheader("📘 Generate Learning Path")
 
@@ -182,10 +200,6 @@ you were missing in your last job search.
         return
 
     if st.button("✨ Generate Learning Path with AI"):
-        if not selected_skills:
-            st.error("Please select at least one skill.")
-            return
-
         with st.spinner("Generating your personalized learning roadmap..."):
             roadmap_md = generate_learning_path(
                 missing_skills=selected_skills,
@@ -197,8 +211,6 @@ you were missing in your last job search.
         st.markdown("---")
         st.subheader("🛣️ Your Learning Path")
         st.markdown(roadmap_md)
-
-        # ================= SAVE TO MONGODB =================
 
         if user_email:
             try:
@@ -220,7 +232,6 @@ you were missing in your last job search.
         else:
             st.info("Login to save this learning path.")
 
-# ================= ENTRY =================
 
 if __name__ == "__main__":
     main()

@@ -1,9 +1,8 @@
-# jobs_api_gpt.py
 from __future__ import annotations
 from urllib.parse import quote_plus
 
 
-# ---------- SKILL EXTRACTION ----------
+# ================= SKILL EXTRACTION =================
 def extract_resume_skills(resume_text: str) -> set[str]:
     text = resume_text.lower()
 
@@ -24,7 +23,6 @@ def extract_resume_skills(resume_text: str) -> set[str]:
 
         # Data / ML
         "machine learning": "Machine Learning",
-        "ml": "Machine Learning",
         "deep learning": "Deep Learning",
         "data analysis": "Data Analysis",
         "pandas": "Pandas",
@@ -36,6 +34,7 @@ def extract_resume_skills(resume_text: str) -> set[str]:
         "kubernetes": "Kubernetes",
         "linux": "Linux",
         "aws": "AWS",
+        "git": "Git",
     }
 
     skills = set()
@@ -46,48 +45,73 @@ def extract_resume_skills(resume_text: str) -> set[str]:
     return skills
 
 
-# ---------- ROLE INFERENCE ----------
+# ================= JOB ROLE → REQUIRED SKILLS =================
+ROLE_SKILLS = {
+    "Machine Learning Engineer": {
+        "Python", "Machine Learning", "NumPy", "Pandas", "Model Deployment", "MLOps"
+    },
+    "Data Scientist": {
+        "Python", "Statistics", "Machine Learning", "SQL", "Data Visualization"
+    },
+    "Data Analyst": {
+        "SQL", "Excel", "Power BI", "Data Analysis", "Statistics"
+    },
+    "Backend Developer": {
+        "Python", "Django", "Flask", "REST APIs", "Databases"
+    },
+    "Frontend Developer": {
+        "HTML", "CSS", "JavaScript", "React", "UI/UX"
+    },
+    "Full Stack Developer": {
+        "JavaScript", "React", "Node.js", "Databases", "REST APIs"
+    },
+    "DevOps Engineer": {
+        "Docker", "Kubernetes", "CI/CD", "Linux", "AWS"
+    },
+    "Software Engineer": {
+        "Data Structures", "Algorithms", "OOP", "Git", "Problem Solving"
+    },
+}
+
+
+# ================= ROLE INFERENCE =================
 def infer_job_roles(skills: set[str]) -> list[str]:
     roles = []
 
     if {"Machine Learning", "Deep Learning"} & skills:
-        roles += ["Machine Learning Engineer", "AI Engineer", "Data Scientist"]
+        roles += ["Machine Learning Engineer", "Data Scientist"]
 
-    if {"Data Analysis", "SQL", "Pandas"} & skills:
-        roles += ["Data Analyst", "Business Analyst"]
+    if {"Data Analysis", "SQL"} & skills:
+        roles += ["Data Analyst"]
 
-    if {"React", "Node.js", "JavaScript"} & skills:
+    if {"React", "JavaScript"} & skills:
         roles += ["Frontend Developer", "Full Stack Developer"]
 
     if {"Flask", "Django"} & skills:
-        roles += ["Backend Developer", "Python Developer"]
+        roles += ["Backend Developer"]
 
-    if {"Docker", "Kubernetes", "AWS"} & skills:
-        roles += ["DevOps Engineer", "Cloud Engineer"]
+    if {"Docker", "AWS"} & skills:
+        roles += ["DevOps Engineer"]
 
     if {"Java", "C++"} & skills:
-        roles += ["Software Engineer", "SDE"]
+        roles += ["Software Engineer"]
 
     # Fallback
     if not roles:
-        roles = [
-            "Software Engineer",
-            "Junior Developer",
-            "Graduate Engineer Trainee",
-        ]
+        roles = ["Software Engineer", "Backend Developer", "Data Analyst"]
 
     # Deduplicate and limit to 5
-    final_roles = []
+    final = []
     for r in roles:
-        if r not in final_roles:
-            final_roles.append(r)
-        if len(final_roles) == 5:
+        if r not in final:
+            final.append(r)
+        if len(final) == 5:
             break
 
-    return final_roles
+    return final
 
 
-# ---------- LIVE JOB LINKS ----------
+# ================= LIVE JOB LINKS =================
 def job_links(role: str, city: str) -> dict:
     role_q = quote_plus(role)
     city_q = quote_plus(city or "India")
@@ -99,30 +123,37 @@ def job_links(role: str, city: str) -> dict:
     }
 
 
-# ---------- MAIN MATCH FUNCTION ----------
+# ================= MAIN MATCH FUNCTION =================
 def match_jobs_with_gpt(resume_text, city, experience, domain):
     """
     FINAL STABLE JOB MATCHER
-    - Always returns 5 jobs
-    - Jobs change with resume
-    - Real live job search links
+    ✅ 5 jobs always
+    ✅ Jobs differ by resume
+    ✅ Missing skills are JOB-SPECIFIC
+    ✅ Real job search links
     """
 
-    skills = extract_resume_skills(resume_text)
-    roles = infer_job_roles(skills)
+    resume_skills = extract_resume_skills(resume_text)
+    roles = infer_job_roles(resume_skills)
 
     matches = []
 
     for idx, role in enumerate(roles):
-        matched_skills = [s for s in skills if s.lower() in role.lower()]
-        missing_skills = ["System Design", "Communication"]
+        required = ROLE_SKILLS.get(role, set())
 
-        score = min(65 + idx * 5 + len(matched_skills) * 5, 95)
+        matched_skills = sorted(required & resume_skills)
+        missing_skills = sorted(required - resume_skills)
+
+        # Score logic
+        score = min(
+            60 + len(matched_skills) * 7 - len(missing_skills) * 2 + idx * 3,
+            95,
+        )
 
         matches.append(
             {
                 "job_title": role,
-                "match_score": score,
+                "match_score": max(score, 45),
                 "matched_skills": matched_skills,
                 "missing_skills": missing_skills,
                 "job_links": job_links(role, city),
@@ -130,6 +161,6 @@ def match_jobs_with_gpt(resume_text, city, experience, domain):
         )
 
     return {
-        "summary": "Live job roles matched dynamically based on your resume skills.",
+        "summary": "Job roles matched dynamically using resume skills and job-specific requirements.",
         "matches": matches,
     }
