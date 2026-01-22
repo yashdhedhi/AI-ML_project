@@ -10,19 +10,19 @@ Client = None
 genai = None
 
 try:
-    from google.genai import Client  # NEW SDK
+    from google.genai import Client  # New SDK
 except Exception:
     try:
-        import google.generativeai as genai  # OLD SDK
+        import google.generativeai as genai  # Old SDK fallback
     except Exception:
         pass
 
 # ================= ENV SETUP =================
+
 load_dotenv()
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-# ✅ RENDER-SAFE MODEL
-GEMINI_MODEL = os.getenv("GOOGLE_GEMINI_MODEL", "gemini-1.0-pro")
+GEMINI_MODEL = os.getenv("GOOGLE_GEMINI_MODEL", "gemini-2.0-flash")
 
 client = None
 GEMINI_ERROR = None
@@ -41,14 +41,16 @@ else:
     except Exception as e:
         GEMINI_ERROR = str(e)
 
+
 # ================= GEMINI FUNCTION =================
+
 def generate_interview_questions(
-    company,
-    role,
-    skills,
-    resume_text,
-    difficulty,
-    num_questions,
+    company: str,
+    role: str,
+    skills: list[str],
+    resume_text: str,
+    difficulty: str,
+    num_questions: int,
 ):
     if GEMINI_ERROR or not client:
         return f"❌ Gemini error: {GEMINI_ERROR}"
@@ -69,7 +71,8 @@ Skills: {skills_str}
 Candidate resume:
 {resume_text}
 
-FORMAT IN MARKDOWN ONLY.
+FORMAT STRICTLY IN MARKDOWN.
+NO JSON.
 """
 
     try:
@@ -86,17 +89,20 @@ FORMAT IN MARKDOWN ONLY.
     except Exception as e:
         return f"❌ Error while generating questions: {e}"
 
+
 # ================= STREAMLIT PAGE =================
+
 def main():
     st.set_page_config(page_title="Interview Prep", page_icon="🎤", layout="wide")
 
     render_topbar(active="Interview")
     st.title("🎤 AI Interview Preparation")
 
+    # -------- SAFE SESSION --------
     last_search = st.session_state.get("last_search") or {}
-    resume_text = last_search.get("resume_text", "")
     result = last_search.get("result") or {}
     matches = result.get("matches") or []
+    resume_text = last_search.get("resume_text", "")
 
     collected_skills = set()
     for job in matches:
@@ -106,30 +112,34 @@ def main():
     if not matches:
         st.info("Run a job search on the Home page to personalize interview questions.")
 
-    company = st.text_input("Company")
+    # -------- INPUTS --------
+    company = st.text_input("Company name")
     role = st.text_input("Role", value="Software Engineer")
 
     difficulty = st.selectbox("Difficulty", ["Mixed", "Easy", "Medium", "Hard"])
-    num_questions = st.slider("Questions", 5, 25, 10)
+    num_questions = st.slider("Number of questions", 5, 25, 10)
 
     selected_skills = st.multiselect(
-        "Skills",
+        "Skills to focus on",
         options=sorted(collected_skills),
         default=sorted(collected_skills),
     )
 
+    # -------- GENERATE --------
     if st.button("🎯 Generate Interview Questions"):
         with st.spinner("Generating interview questions..."):
             output = generate_interview_questions(
-                company,
-                role,
-                selected_skills,
-                resume_text,
-                difficulty,
-                num_questions,
+                company=company,
+                role=role,
+                skills=selected_skills,
+                resume_text=resume_text,
+                difficulty=difficulty,
+                num_questions=num_questions,
             )
+
         st.markdown("---")
         st.markdown(output)
+
 
 if __name__ == "__main__":
     main()

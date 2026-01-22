@@ -12,19 +12,19 @@ Client = None
 genai = None
 
 try:
-    from google.genai import Client
+    from google.genai import Client  # New SDK
 except Exception:
     try:
-        import google.generativeai as genai
+        import google.generativeai as genai  # Old SDK fallback
     except Exception:
         pass
 
 # ================= ENV SETUP =================
+
 load_dotenv()
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-# ✅ RENDER-SAFE MODEL
-GEMINI_MODEL = os.getenv("GOOGLE_GEMINI_MODEL", "gemini-1.0-pro")
+GEMINI_MODEL = os.getenv("GOOGLE_GEMINI_MODEL", "gemini-2.0-flash")
 
 client = None
 GEMINI_ERROR = None
@@ -43,7 +43,9 @@ else:
     except Exception as e:
         GEMINI_ERROR = str(e)
 
+
 # ================= GEMINI FUNCTION =================
+
 def generate_learning_path(missing_skills, target_role, experience, resume_text):
     if GEMINI_ERROR or not client:
         return f"❌ Gemini error: {GEMINI_ERROR}"
@@ -67,7 +69,9 @@ Missing skills:
 {skills_list}
 
 Create a PHASE-WISE learning roadmap.
-FORMAT IN MARKDOWN ONLY.
+
+FORMAT STRICTLY IN MARKDOWN.
+NO JSON.
 """
 
     try:
@@ -84,7 +88,9 @@ FORMAT IN MARKDOWN ONLY.
     except Exception as e:
         return f"❌ Error while generating learning path: {e}"
 
+
 # ================= STREAMLIT PAGE =================
+
 def main():
     st.set_page_config(page_title="Learning Path", page_icon="📚", layout="wide")
 
@@ -103,27 +109,38 @@ def main():
     default_domain = last_search.get("domain", "")
 
     if not matches:
-        st.warning("Run a job search first.")
+        st.warning("Run a job search on the Home page first.")
         return
 
-    missing_skills = sorted(
-        {s.strip() for j in matches for s in (j.get("missing_skills") or []) if s}
-    )
+    # -------- MISSING SKILLS --------
+    missing_skills = sorted({
+        s.strip()
+        for job in matches
+        for s in (job.get("missing_skills") or [])
+        if s
+    })
+
+    st.subheader("🧩 Missing Skills")
+    st.write(", ".join(missing_skills))
 
     selected_skills = st.multiselect(
-        "Missing skills",
+        "Select skills to learn",
         options=missing_skills,
         default=missing_skills,
     )
 
-    target_role = st.text_input(
-        "Target role",
-        value=default_domain or "Software Engineer",
-    )
+    target_role = st.text_input("Target role", value=default_domain or "Software Engineer")
+
+    st.subheader("▶️ YouTube Tutorials")
+    for skill in selected_skills:
+        yt_url = f"https://www.youtube.com/results?search_query={quote_plus(skill + ' tutorial')}"
+        st.link_button(skill, yt_url)
+
+    st.markdown("---")
 
     if st.button("✨ Generate Learning Path"):
-        with st.spinner("Generating roadmap..."):
-            roadmap_md = generate_learning_path(
+        with st.spinner("Generating learning path..."):
+            roadmap = generate_learning_path(
                 selected_skills,
                 target_role,
                 experience,
@@ -131,23 +148,23 @@ def main():
             )
 
         st.markdown("---")
-        st.markdown(roadmap_md)
+        st.markdown(roadmap)
 
         if user_email:
             try:
-                get_collection("learning_paths").insert_one(
-                    {
-                        "user_email": user_email,
-                        "skills": selected_skills,
-                        "target_role": target_role,
-                        "experience": experience,
-                        "roadmap_md": roadmap_md,
-                        "created_at": datetime.utcnow(),
-                    }
-                )
-                st.success("Learning path saved.")
+                col = get_collection("learning_paths")
+                col.insert_one({
+                    "user_email": user_email,
+                    "skills": selected_skills,
+                    "target_role": target_role,
+                    "experience": experience,
+                    "roadmap_md": roadmap,
+                    "created_at": datetime.utcnow(),
+                })
+                st.success("Learning path saved!")
             except Exception as e:
-                st.error(e)
+                st.error(f"Save failed: {e}")
+
 
 if __name__ == "__main__":
     main()
