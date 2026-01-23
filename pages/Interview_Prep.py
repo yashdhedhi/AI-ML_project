@@ -1,6 +1,6 @@
 import streamlit as st
 from urllib.parse import quote_plus
-import os
+import os, time
 
 from ui import render_topbar
 from dotenv import load_dotenv
@@ -10,15 +10,29 @@ Client = None
 genai = None
 
 try:
-    from google.genai import Client  # New SDK
+    from google.genai import Client
 except Exception:
     try:
-        import google.generativeai as genai  # Old SDK fallback
+        import google.generativeai as genai
     except Exception:
         pass
 
-# ================= ENV SETUP =================
 
+# ================= RATE LIMIT (ANTI 429) =================
+def gemini_rate_limit(seconds: int = 25):
+    last = st.session_state.get("_last_gemini_call", 0)
+    now = time.time()
+
+    if now - last < seconds:
+        wait = int(seconds - (now - last))
+        st.warning(f"⏳ Please wait {wait}s before next request")
+        return False
+
+    st.session_state["_last_gemini_call"] = now
+    return True
+
+
+# ================= ENV =================
 load_dotenv()
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
@@ -27,9 +41,7 @@ GEMINI_MODEL = os.getenv("GOOGLE_GEMINI_MODEL", "gemini-2.0-flash")
 client = None
 GEMINI_ERROR = None
 
-if not GEMINI_API_KEY:
-    GEMINI_ERROR = "GEMINI_API_KEY not set in environment variables."
-else:
+if GEMINI_API_KEY:
     try:
         if Client:
             client = Client(api_key=GEMINI_API_KEY)
@@ -37,107 +49,91 @@ else:
             genai.configure(api_key=GEMINI_API_KEY)
             client = genai
         else:
-            GEMINI_ERROR = "No Gemini SDK available"
+            GEMINI_ERROR = "Gemini SDK missing"
     except Exception as e:
         GEMINI_ERROR = str(e)
+else:
+    GEMINI_ERROR = "GEMINI_API_KEY not set"
+
+
+# ================= CACHED GEMINI =================
+@st.cache_data(ttl=600)
+def cached_generate(prompt: str):
+    if Client:
+        r = client.models.generate_content(model=GEMINI_MODEL, contents=prompt)
+        return r.text
+    else:
+        model = client.GenerativeModel(GEMINI_MODEL)
+        return model.generate_content(prompt).text
 
 
 # ================= GEMINI FUNCTION =================
+def generate_interview_questions(company, role, skills, resume_text, difficulty, num_questions):
 
-def generate_interview_questions(
-    company: str,
-    role: str,
-    skills: list[str],
-    resume_text: str,
-    difficulty: str,
-    num_questions: int,
-):
     if GEMINI_ERROR or not client:
-        return f"❌ Gemini error: {GEMINI_ERROR}"
+        return f"❌ {GEMINI_ERROR}"
 
-    skills_str = ", ".join(skills) if skills else "General programming"
-    resume_text = (resume_text or "")[:3000]
+    skills_str = ", ".join(skills) if skills else "General"
+
+    resume_text = (resume_text or "")[:1500]  # reduce tokens
 
     prompt = f"""
-You are an experienced technical interviewer.
-
 Create {num_questions} interview questions.
 
-Company: {company or "Tech Company"}
-Role: {role or "Software Engineer"}
+Role: {role}
+Company: {company}
 Difficulty: {difficulty}
 Skills: {skills_str}
 
-Candidate resume:
+Resume:
 {resume_text}
 
-FORMAT STRICTLY IN MARKDOWN.
-NO JSON.
+Markdown only.
 """
 
     try:
-        if Client:
-            response = client.models.generate_content(
-                model=GEMINI_MODEL,
-                contents=prompt,
-            )
-            return response.text.strip()
-        else:
-            model = client.GenerativeModel(GEMINI_MODEL)
-            return model.generate_content(prompt).text.strip()
-
+        return cached_generate(prompt)
     except Exception as e:
-        return f"❌ Error while generating questions: {e}"
+        return f"❌ API Error: {e}"
 
 
-# ================= STREAMLIT PAGE =================
-
+# ================= PAGE =================
 def main():
     st.set_page_config(page_title="Interview Prep", page_icon="🎤", layout="wide")
 
     render_topbar(active="Interview")
     st.title("🎤 AI Interview Preparation")
 
-    # -------- SAFE SESSION --------
     last_search = st.session_state.get("last_search") or {}
     result = last_search.get("result") or {}
     matches = result.get("matches") or []
+
     resume_text = last_search.get("resume_text", "")
 
-    collected_skills = set()
-    for job in matches:
-        collected_skills.update(job.get("matched_skills", []))
-        collected_skills.update(job.get("missing_skills", []))
+    skills = {
+        s
+        for j in matches
+        for s in (j.get("matched_skills", []) + j.get("missing_skills", []))
+    }
 
-    if not matches:
-        st.info("Run a job search on the Home page to personalize interview questions.")
-
-    # -------- INPUTS --------
-    company = st.text_input("Company name")
+    company = st.text_input("Company")
     role = st.text_input("Role", value="Software Engineer")
 
     difficulty = st.selectbox("Difficulty", ["Mixed", "Easy", "Medium", "Hard"])
-    num_questions = st.slider("Number of questions", 5, 25, 10)
+    num_questions = st.slider("Questions", 5, 25, 10)
 
-    selected_skills = st.multiselect(
-        "Skills to focus on",
-        options=sorted(collected_skills),
-        default=sorted(collected_skills),
-    )
+    selected_skills = st.multiselect("Skills", sorted(skills), default=sorted(skills))
 
-    # -------- GENERATE --------
     if st.button("🎯 Generate Interview Questions"):
-        with st.spinner("Generating interview questions..."):
+
+        if not gemini_rate_limit():
+            return
+
+        with st.spinner("Generating..."):
             output = generate_interview_questions(
-                company=company,
-                role=role,
-                skills=selected_skills,
-                resume_text=resume_text,
-                difficulty=difficulty,
-                num_questions=num_questions,
+                company, role, selected_skills, resume_text, difficulty, num_questions
             )
 
-        st.markdown("---")
         st.markdown(output)
 
 
